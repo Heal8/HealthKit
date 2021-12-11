@@ -1154,11 +1154,13 @@ static NSString *const HKPluginKeyUUID = @"UUID";
     NSDictionary *args = command.arguments[0];
     NSString *sampleTypeString = args[HKPluginKeySampleType];
     HKSampleType *type = [HealthKit getHKSampleType:sampleTypeString];
+    NSString *unitString = [args objectForKey:HKPluginKeyUnit];
     HKUpdateFrequency updateFrequency = HKUpdateFrequencyImmediate;
     if (type == nil) {
         [HealthKit triggerErrorCallbackWithMessage:@"sampleType was invalid" command:command delegate:self.commandDelegate];
         return;
     }
+    HKUnit *unit = unitString!=nil ? [HKUnit unitFromString:unitString] : nil;
 
     // TODO use this an an anchor for an achored query
     //__block int *anchor = 0;
@@ -1174,24 +1176,12 @@ static NSString *const HKPluginKeyUUID = @"UUID";
                                                   NSError *error) {
                                               __block HealthKit *bSelf = self;
                                               if (error) {
-                                                  handler();
-                                                  dispatch_sync(dispatch_get_main_queue(), ^{
-                                                      [HealthKit triggerErrorCallbackWithMessage:error.localizedDescription command:command delegate:bSelf.commandDelegate];
-                                                  });
-                                              } else {
-                                                  handler();
-#ifdef HKPLUGIN_DEBUG
-                                                  NSLog(@"HealthKit plugin received a monitorSampleType, passing it to JS.");
-#endif
-                                                  // TODO using a anchored qery to return the new and updated values.
-                                                  // Until then use querySampleType({limit=1, ascending="T", endDate=new Date()}) to return the last result
+                                                  CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:error.localizedDescription];
+                                                  [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
 
-                                                  // Issue #47: commented this block since it resulted in callbacks not being delivered while the app was in the background
-                                                  //dispatch_sync(dispatch_get_main_queue(), ^{
-                                                  CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:sampleTypeString];
-                                                  [result setKeepCallbackAsBool:YES];
-                                                  [bSelf.commandDelegate sendPluginResult:result callbackId:command.callbackId];
-                                                  //});
+                                                  handler();
+                                              } else {
+                                                  [self querySampleTypeLastRecord:command unit:unit type:type completionHandler:handler];
                                               }
                                           }];
 
@@ -1209,6 +1199,159 @@ static NSString *const HKPluginKeyUUID = @"UUID";
         // TODO provide some kind of callback to stop monitoring this value, store the query in some kind of WeakHashSet equilavent?
     }];
 };
+
+- (void)sendLastResult:(CDVInvokedUrlCommand*)command type:(HKSampleType*)type unit:(HKUnit*)unit results:(NSArray<HKSample *> *)results completionHandler:(HKObserverQueryCompletionHandler)completionHandler {
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    [df setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+
+    NSMutableDictionary *entry = nil;
+
+    if (results.count > 0) {
+        HKSample *finalResult = [results objectAtIndex:results.count - 1];
+        entry = [self getSampleEntry:finalResult df:df unit:unit];
+    }
+    CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:entry];
+    [result setKeepCallbackAsBool:YES];
+    [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+
+    if (entry != nil) {
+        dispatch_time_t delay = dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC * 15);
+        dispatch_after(delay, dispatch_get_main_queue(), ^{
+            completionHandler();
+        });
+    } else {
+        completionHandler();
+    }
+}
+
+- (void) querySampleTypeLastRecord:(CDVInvokedUrlCommand*)command unit:(HKUnit*)unit type:(HKSampleType*)type completionHandler:(HKObserverQueryCompletionHandler)completionHandler {
+
+    HKAnchoredObjectQuery *query;
+    if ([HKAnchoredObjectQuery instancesRespondToSelector:@selector(initWithType:predicate:anchor:limit:resultsHandler:)]) {
+        HKQueryAnchor *anchor = HKAnchoredObjectQueryNoAnchor;
+        if (self.anchorSet) {
+            anchor = self.anchor;
+        }
+
+        query = [[HKAnchoredObjectQuery alloc]
+                 initWithType:type
+                 predicate:nil
+                 anchor:anchor
+                 limit:HKObjectQueryNoLimit
+                 resultsHandler:^(HKAnchoredObjectQuery *query,
+                                  NSArray<HKSample *> *results,
+                                  NSArray<HKDeletedObject *> *deletedObjects,
+                                  HKQueryAnchor *newAnchor,
+                                  NSError *error)
+                 {
+                     if (error) {
+                         CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:error.localizedDescription];
+                         [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+                     } else {
+                         self.anchor = newAnchor;
+                         self.anchorSet = YES;
+
+                         [self sendLastResult:command type:type unit:unit results:results completionHandler:completionHandler];
+                     }
+                 }];
+    } else {
+        NSUInteger anchorOld = HKAnchoredObjectQueryNoAnchor;
+        if (self.anchorSet) {
+            anchorOld = self.anchorOld;
+        }
+        query = [[HKAnchoredObjectQuery alloc]
+                 initWithType:type
+                 predicate:nil
+                 anchor:anchorOld
+                 limit:HKObjectQueryNoLimit
+                 completionHandler:^(HKAnchoredObjectQuery *query,
+                                     NSArray<__kindof HKSample *> * __nullable results,
+                                     NSUInteger newAnchor,
+                                     NSError * __nullable error)
+                 {
+                     if (error) {
+                         CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:error.localizedDescription];
+                         [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+                     } else {
+                         self.anchorOld = newAnchor;
+                         self.anchorSet = YES;
+
+                         [self sendLastResult:command type:type unit:unit results:results completionHandler:completionHandler];
+                     }
+                 }];
+    }
+
+    [[HealthKit sharedHealthStore] executeQuery:query];
+}
+
+- (NSMutableDictionary*) getSampleEntry:(HKSample*)sample df:(NSDateFormatter*)df unit:(HKUnit*)unit {
+    NSDate *startSample = sample.startDate;
+    NSDate *endSample = sample.endDate;
+
+    NSMutableDictionary *entry = [[NSMutableDictionary alloc] initWithObjectsAndKeys:
+                                  [df stringFromDate:startSample], HKPluginKeyStartDate,
+                                  [df stringFromDate:endSample], HKPluginKeyEndDate,
+                                  nil];
+
+    if ([sample isKindOfClass:[HKCategorySample class]]) {
+        HKCategorySample *csample = (HKCategorySample *)sample;
+        [entry setValue:[NSNumber numberWithLong:csample.value] forKey:HKPluginKeyValue];
+        [entry setValue:csample.categoryType.identifier forKey:@"catagoryType.identifier"];
+        [entry setValue:csample.categoryType.description forKey:@"catagoryType.description"];
+        [entry setValue:csample.UUID.UUIDString forKey:HKPluginKeyUUID];
+        [entry setValue:csample.source.name forKey:HKPluginKeySourceName];
+        [entry setValue:csample.source.bundleIdentifier forKey:HKPluginKeySourceBundleId];
+        [entry setValue:[df stringFromDate:csample.startDate] forKey:HKPluginKeyStartDate];
+        [entry setValue:[df stringFromDate:csample.endDate] forKey:HKPluginKeyEndDate];
+        if (csample.metadata == nil || ![NSJSONSerialization isValidJSONObject:csample.metadata]) {
+            [entry setValue:@{} forKey:HKPluginKeyMetadata];
+        } else {
+            [entry setValue:csample.metadata forKey:HKPluginKeyMetadata];
+        }
+    } else if ([sample isKindOfClass:[HKCorrelationType class]]) {
+        HKCorrelation* correlation = (HKCorrelation*)sample;
+        [entry setValue:correlation.correlationType.identifier forKey:HKPluginKeyCorrelationType];
+        if (correlation.metadata == nil || ![NSJSONSerialization isValidJSONObject:correlation.metadata]) {
+            [entry setValue:@{} forKey:HKPluginKeyMetadata];
+        } else {
+            [entry setValue:correlation.metadata forKey:HKPluginKeyMetadata];
+        }
+        [entry setValue:correlation.UUID.UUIDString forKey:HKPluginKeyUUID];
+        [entry setValue:correlation.source.name forKey:HKPluginKeySourceName];
+        [entry setValue:correlation.source.bundleIdentifier forKey:HKPluginKeySourceBundleId];
+        [entry setValue:[df stringFromDate:correlation.startDate] forKey:HKPluginKeyStartDate];
+        [entry setValue:[df stringFromDate:correlation.endDate] forKey:HKPluginKeyEndDate];
+    } else if ([sample isKindOfClass:[HKQuantitySample class]]) {
+        HKQuantitySample *qsample = (HKQuantitySample *)sample;
+        [entry setValue:[NSNumber numberWithDouble:[qsample.quantity doubleValueForUnit:unit]] forKey:@"quantity"];
+        [entry setValue:qsample.UUID.UUIDString forKey:HKPluginKeyUUID];
+        [entry setValue:qsample.source.name forKey:HKPluginKeySourceName];
+        [entry setValue:qsample.source.bundleIdentifier forKey:HKPluginKeySourceBundleId];
+        [entry setValue:[df stringFromDate:qsample.startDate] forKey:HKPluginKeyStartDate];
+        [entry setValue:[df stringFromDate:qsample.endDate] forKey:HKPluginKeyEndDate];
+        if (qsample.metadata == nil || ![NSJSONSerialization isValidJSONObject:qsample.metadata]) {
+            [entry setValue:@{} forKey:HKPluginKeyMetadata];
+        } else {
+            [entry setValue:qsample.metadata forKey:HKPluginKeyMetadata];
+        }
+    } else if ([sample isKindOfClass:[HKWorkout class]]) {
+        HKWorkout *wsample = (HKWorkout*)sample;
+        [entry setValue:wsample.UUID.UUIDString forKey:HKPluginKeyUUID];
+        [entry setValue:wsample.source.name forKey:HKPluginKeySourceName];
+        [entry setValue:wsample.source.bundleIdentifier forKey:HKPluginKeySourceBundleId];
+        [entry setValue:[df stringFromDate:wsample.startDate] forKey:HKPluginKeyStartDate];
+        [entry setValue:[df stringFromDate:wsample.endDate] forKey:HKPluginKeyEndDate];
+        [entry setValue:[NSNumber numberWithDouble:wsample.duration] forKey:@"duration"];
+        if (wsample.metadata == nil || ![NSJSONSerialization isValidJSONObject:wsample.metadata]) {
+            [entry setValue:@{} forKey:HKPluginKeyMetadata];
+        } else {
+            [entry setValue:wsample.metadata forKey:HKPluginKeyMetadata];
+        }
+    } else {
+        return nil;
+    }
+    return entry;
+}
 
 /**
  * Get the sum of a specified quantity type
@@ -1297,55 +1440,16 @@ static NSString *const HKPluginKeyUUID = @"UUID";
                                                                           [HealthKit triggerErrorCallbackWithMessage:innerError.localizedDescription command:command delegate:bSelf.commandDelegate];
                                                                       });
                                                                   } else {
+                                                                      NSDateFormatter *df = [[NSDateFormatter alloc] init];
+                                                                      [df setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+
                                                                       NSMutableArray *finalResults = [[NSMutableArray alloc] initWithCapacity:results.count];
 
                                                                       for (HKSample *sample in results) {
-
-                                                                          NSDate *startSample = sample.startDate;
-                                                                          NSDate *endSample = sample.endDate;
-                                                                          NSMutableDictionary *entry = [NSMutableDictionary dictionary];
-
-                                                                          // common indices
-                                                                          entry[HKPluginKeyStartDate] =[HealthKit stringFromDate:startSample];
-                                                                          entry[HKPluginKeyEndDate] = [HealthKit stringFromDate:endSample];
-                                                                          entry[HKPluginKeyUUID] = sample.UUID.UUIDString;
-
-                                                                          //@TODO Update deprecated API calls
-                                                                          entry[HKPluginKeySourceName] = sample.source.name;
-                                                                          entry[HKPluginKeySourceBundleId] = sample.source.bundleIdentifier;
-
-                                                                          if (sample.metadata == nil || ![NSJSONSerialization isValidJSONObject:sample.metadata]) {
-                                                                              entry[HKPluginKeyMetadata] = @{};
-                                                                          } else {
-                                                                              entry[HKPluginKeyMetadata] = sample.metadata;
+                                                                          NSMutableDictionary *entry = [self getSampleEntry:sample df:df unit:unit];
+                                                                          if (entry != nil) {
+                                                                              [finalResults addObject:entry];
                                                                           }
-
-                                                                          // case-specific indices
-                                                                          if ([sample isKindOfClass:[HKCategorySample class]]) {
-
-                                                                              HKCategorySample *csample = (HKCategorySample *) sample;
-                                                                              entry[HKPluginKeyValue] = @(csample.value);
-                                                                              entry[@"categoryType.identifier"] = csample.categoryType.identifier;
-                                                                              entry[@"categoryType.description"] = csample.categoryType.description;
-
-                                                                          } else if ([sample isKindOfClass:[HKCorrelationType class]]) {
-
-                                                                              HKCorrelation *correlation = (HKCorrelation *) sample;
-                                                                              entry[HKPluginKeyCorrelationType] = correlation.correlationType.identifier;
-
-                                                                          } else if ([sample isKindOfClass:[HKQuantitySample class]]) {
-
-                                                                              HKQuantitySample *qsample = (HKQuantitySample *) sample;
-                                                                              [entry setValue:@([qsample.quantity doubleValueForUnit:unit]) forKey:@"quantity"];
-
-                                                                          } else if ([sample isKindOfClass:[HKWorkout class]]) {
-
-                                                                              HKWorkout *wsample = (HKWorkout *) sample;
-                                                                              [entry setValue:@(wsample.duration) forKey:@"duration"];
-
-                                                                          }
-
-                                                                          [finalResults addObject:entry];
                                                                       }
 
                                                                       dispatch_sync(dispatch_get_main_queue(), ^{

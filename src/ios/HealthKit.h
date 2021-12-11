@@ -3,6 +3,10 @@
 
 @interface HealthKit :CDVPlugin
 
+@property (nonatomic) HKQueryAnchor *anchor;
+@property (nonatomic) NSUInteger anchorOld;
+@property (nonatomic) BOOL anchorSet;
+
 /**
  * Tell delegate whether or not health data is available
  *

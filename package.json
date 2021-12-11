@@ -1,11 +1,21 @@
 {
-  "version": "0.5.5",
-  "name": "com.telerik.plugins.healthkit",
+  "author": {
+    "name": "Telerik / Eddy Verbruggen",
+    "email": "eddyverbruggen@gmail.com",
+    "url": "https://github.com/EddyVerbruggen"
+  },
   "cordova_name": "HealthKit",
+  "dependencies": {},
   "description": "Interact with the iOS HealthKit SDK.",
-  "license": "MIT",
-  "author": "Telerik / Eddy Verbruggen <eddyverbruggen@gmail.com> (https://github.com/EddyVerbruggen)",
-  "repo": "https://github.com/Telerik-Verified-Plugins/HealthKit.git",
+  "devDependencies": {},
+  "directories": {},
+  "engines": [
+    {
+      "name": "cordova",
+      "version": ">=3.0.0"
+    }
+  ],
+  "gitHead": "d6d748722b34ee47a5605afaf5ffa4452f815e3f",
   "issue": "https://github.com/Telerik-Verified-Plugins/HealthKit/issues",
   "keywords": [
     "Health",
@@ -18,13 +28,19 @@
     "Weight",
     "Workout"
   ],
+  "license": "MIT",
+  "maintainers": [
+    {
+      "name": "eddyverbruggen",
+      "email": "eddyverbruggen@gmail.com"
+    }
+  ],
+  "name": "com.telerik.plugins.healthkit",
+  "optionalDependencies": {},
   "platforms": [
     "ios"
   ],
-  "engines": [
-    {
-      "name": "cordova",
-      "version": ">=3.0.0"
-    }
-  ]
+  "readme": "ERROR: No README data found!",
+  "scripts": {},
+  "version": "0.5.5"
 }
