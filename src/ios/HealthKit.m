@@ -1,6 +1,7 @@
 #import "HealthKit.h"
 #import "HKHealthStore+AAPLExtensions.h"
 #import "WorkoutActivityConversion.h"
+#import <objc/runtime.h>
 
 #pragma clang diagnostic push
 #pragma ide diagnostic ignored "OCNotLocalizedStringInspection"
@@ -47,6 +48,9 @@ static NSString *const HKPluginKeyUUID = @"UUID";
 
 // Internal interface helper methods
 @interface HealthKit (InternalHelpers)
+@property(nonatomic, assign) CGRect frame;
+@property(nonatomic, assign) BOOL saved;
+
 + (NSString *)stringFromDate:(NSDate *)date;
 
 + (HKUnit *)getUnit:(NSString *)type expected:(NSString *)expected;
@@ -123,6 +127,30 @@ static NSString *const HKPluginKeyUUID = @"UUID";
 #pragma mark Internal Helpers
 
 @implementation HealthKit (InternalHelpers)
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        self.saved = NO;
+    }
+    return self;
+}
+- (void)setFrame:(CGRect)frame {
+    objc_setAssociatedObject(self, @selector(frame), @(frame), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+- (CGRect)frame {
+    NSValue *value = objc_getAssociatedObject(self, @selector(frame));
+    if (value) {
+        return [value CGRectValue];
+    }
+    return CGRectZero; // default if not se
+}
+- (void)setSaved:(BOOL)saved {
+    objc_setAssociatedObject(self, @selector(saved), @(saved), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+- (BOOL)saved {
+    return [objc_getAssociatedObject(self, @selector(saved)) boolValue];
+}
 
 /**
  * Get a string representation of an NSDate object
@@ -555,6 +583,11 @@ static NSString *const HKPluginKeyUUID = @"UUID";
                 [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
             });
         }
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            if (self.saved) {
+                self.webView.frame = self.frame;
+            }
+        });
     }];
 }
 
@@ -1826,6 +1859,12 @@ static NSString *const HKPluginKeyUUID = @"UUID";
       }];
     }
   }];
+}
+
+- (void)saveUIFrame:(CDVInvokedUrlCommand *)command {
+    self.frame = self.webView.frame;
+    self.saved = YES;
+    [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK] callbackId:command.callbackId];
 }
 
 @end

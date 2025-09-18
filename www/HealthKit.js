@@ -86,6 +86,20 @@ define('readWeight');
 define('readHeight');
 define('readBloodType', {noArgs: true});
 
+HealthKit.prototype.saveUIFrame = function() {
+  return new Promise((resolve, reject) => {
+    function success(data) {
+      resolve(data);
+    }
+
+    function fail(error) {
+      reject(error);
+    }
+
+    cordova.exec(success, fail, 'HealthKit', 'saveUIFrame', []);
+  });
+};
+
 define('saveWeight', function(options) {
   if (options.date == null) options.date = new Date();
   if (typeof options.date === 'object') rounds(options, 'date');
